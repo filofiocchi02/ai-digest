@@ -186,12 +186,14 @@ def claude_deeplink(title, url):
     return "claude://claude.ai/new?q=" + urllib.parse.quote(prompt)
 
 
-def render_html(sections, date_str):
+def render_html(sections, date_str, archive_link=True, archive_back_link=False):
     css = """
     body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:760px;
          margin:40px auto;padding:0 16px;color:#1a1a1a;line-height:1.5}
     h1{font-size:1.6em;margin-bottom:0}
-    .date{color:#888;margin-bottom:28px}
+    .date{color:#888;margin-bottom:4px}
+    .archive-link{font-size:0.85em;margin-bottom:28px}
+    .archive-link a{color:#666}
     h2{border-bottom:2px solid #eee;padding-bottom:6px;margin-top:36px}
     .item{margin-bottom:16px}
     .item .title a{font-weight:600;text-decoration:none;color:#1a1a1a}
@@ -202,7 +204,11 @@ def render_html(sections, date_str):
     """
     parts = [f"<html><head><meta charset='utf-8'><title>LLM Digest {date_str}</title>"
               f"<style>{css}</style></head><body>"]
+    if archive_back_link:
+        parts.append("<div class='archive-link'><a href='./'>← Back to archive</a></div>")
     parts.append(f"<h1>🧠 Daily LLM / Agentic AI Digest</h1><div class='date'>{date_str}</div>")
+    if archive_link:
+        parts.append("<div class='archive-link'><a href='archive/'>📂 Browse past digests</a></div>")
 
     for section_title, items in sections.items():
         parts.append(f"<h2>{section_title}</h2>")
@@ -219,6 +225,46 @@ def render_html(sections, date_str):
                 f"<a class='expand' href='{link}'>Expand in Claude ↗</a></div>"
                 "</div>"
             )
+    parts.append("</body></html>")
+    return "\n".join(parts)
+
+
+def render_archive_index(archive_dir):
+    """Scan docs/archive/*.html and build an index.html listing them all,
+    newest first, so the archive is browsable instead of requiring a
+    guessed URL."""
+    dated_files = sorted(
+        (f for f in os.listdir(archive_dir)
+         if f.endswith(".html") and f != "index.html"),
+        reverse=True,  # newest date first (filenames are YYYY-MM-DD.html)
+    )
+
+    css = """
+    body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:600px;
+         margin:40px auto;padding:0 16px;color:#1a1a1a;line-height:1.6}
+    h1{font-size:1.4em}
+    a.back{font-size:0.85em;color:#666}
+    ul{list-style:none;padding:0}
+    li{padding:8px 0;border-bottom:1px solid #eee}
+    li a{text-decoration:none;color:#1a1a1a;font-weight:500}
+    li a:hover{text-decoration:underline}
+    """
+    parts = [
+        "<html><head><meta charset='utf-8'><title>Digest Archive</title>"
+        f"<style>{css}</style></head><body>",
+        "<a class='back' href='../'>← Back to today's digest</a>",
+        "<h1>📂 Digest Archive</h1>",
+    ]
+
+    if not dated_files:
+        parts.append("<p><i>No past digests yet — check back tomorrow.</i></p>")
+    else:
+        parts.append("<ul>")
+        for fname in dated_files:
+            date_label = fname.replace(".html", "")
+            parts.append(f"<li><a href='{fname}'>{date_label}</a></li>")
+        parts.append("</ul>")
+
     parts.append("</body></html>")
     return "\n".join(parts)
 
@@ -246,16 +292,22 @@ def main():
     with open(out_path, "w") as f:
         f.write(html)
 
-    # Also keep a dated archive copy (optional, nice to have)
+    # Also keep a dated archive copy, plus a browsable index of all of them
     archive_dir = os.path.join(OUTPUT_DIR, "archive")
     os.makedirs(archive_dir, exist_ok=True)
     with open(os.path.join(archive_dir, f"{date_str}.html"), "w") as f:
-        f.write(html)
+        f.write(render_html(sections, date_str, archive_link=False, archive_back_link=True))
+
+    with open(os.path.join(archive_dir, "index.html"), "w") as f:
+        f.write(render_archive_index(archive_dir))
 
     print(f"Wrote digest with "
           f"{sum(len(v) for v in sections.values())} items to {out_path}")
 
     notify_telegram(date_str, sections)
+
+
+TELEGRAM_ITEMS_PER_SECTION = 3  # how many headlines to show per category in the ping
 
 
 def notify_telegram(date_str, sections):
@@ -265,14 +317,33 @@ def notify_telegram(date_str, sections):
     if not (token and chat_id):
         return  # optional feature, skip silently if not configured
 
-    counts = " · ".join(f"{k}: {len(v)}" for k, v in sections.items())
-    text = f"🧠 LLM Digest — {date_str}\n{counts}"
+    lines = [f"🧠 *LLM Digest — {date_str}*", ""]
+
+    for section_title, items in sections.items():
+        if not items:
+            continue
+        lines.append(f"{section_title}")
+        for it in items[:TELEGRAM_ITEMS_PER_SECTION]:
+            title = it.get("title", "").strip()
+            lines.append(f"• {title}")
+        remaining = len(items) - TELEGRAM_ITEMS_PER_SECTION
+        if remaining > 0:
+            lines.append(f"  …+{remaining} more")
+        lines.append("")  # blank line between sections
+
     if pages_url:
-        text += f"\n{pages_url}"
+        lines.append(f"Full digest → {pages_url}")
+
+    text = "\n".join(lines).strip()
 
     requests.post(
         f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": chat_id, "text": text},
+        json={
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True,
+        },
         timeout=20,
     )
 
