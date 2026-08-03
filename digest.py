@@ -7,13 +7,15 @@ single HTML page with one section per category plus "Expand in Claude" links.
 
 Env vars required (set as GitHub Actions secrets):
   GROQ_API_KEY        - free key from https://console.groq.com
-Optional (for Telegram push notification):
-  TELEGRAM_BOT_TOKEN
-  TELEGRAM_CHAT_ID
+Optional (for Telegram push notification / custom domain):
+   TELEGRAM_BOT_TOKEN
+   TELEGRAM_CHAT_ID
+   PAGES_URL           - e.g. https://filofiocchi02.github.io/ai-digest/
 """
 
 import os
 import json
+import html
 import textwrap
 import datetime
 import urllib.parse
@@ -216,12 +218,16 @@ def render_html(sections, date_str, archive_link=True, archive_back_link=False):
             parts.append("<p><i>No items today.</i></p>")
             continue
         for it in items:
+            title = html.escape(it["title"])
+            summary = html.escape(it.get("summary", ""))
+            source = html.escape(it.get("source", ""))
+            url = html.escape(it["url"])
             link = claude_deeplink(it["title"], it["url"])
             parts.append(
                 "<div class='item'>"
-                f"<div class='title'><a href='{it['url']}' target='_blank'>{it['title']}</a></div>"
-                f"<div class='summary'>{it.get('summary', '')}</div>"
-                f"<div class='meta'>{it.get('source', '')} · "
+                f"<div class='title'><a href='{url}' target='_blank'>{title}</a></div>"
+                f"<div class='summary'>{summary}</div>"
+                f"<div class='meta'>{source} · "
                 f"<a class='expand' href='{link}'>Expand in Claude ↗</a></div>"
                 "</div>"
             )
@@ -310,42 +316,61 @@ def main():
 TELEGRAM_ITEMS_PER_SECTION = 3  # how many headlines to show per category in the ping
 
 
+def get_pages_url():
+    pages_url = os.environ.get("PAGES_URL", "").strip()
+    if pages_url:
+        return pages_url
+
+    # Automatically derive GitHub Pages URL from standard Actions environment variable
+    gh_repo = os.environ.get("GITHUB_REPOSITORY", "").strip()  # e.g. owner/repo
+    if "/" in gh_repo:
+        owner, repo = gh_repo.split("/", 1)
+        return f"https://{owner}.github.io/{repo}/"
+
+    return ""
+
+
 def notify_telegram(date_str, sections):
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    pages_url = os.environ.get("PAGES_URL")  # e.g. https://you.github.io/llm-digest/
     if not (token and chat_id):
         return  # optional feature, skip silently if not configured
 
-    lines = [f"🧠 *LLM Digest — {date_str}*", ""]
+    pages_url = get_pages_url()
+
+    lines = [f"🧠 <b>LLM Digest — {html.escape(date_str)}</b>\n"]
 
     for section_title, items in sections.items():
         if not items:
             continue
-        lines.append(f"{section_title}")
+        lines.append(f"<b>{html.escape(section_title)}</b>")
         for it in items[:TELEGRAM_ITEMS_PER_SECTION]:
-            title = it.get("title", "").strip()
+            title = html.escape(it.get("title", "").strip())
             lines.append(f"• {title}")
         remaining = len(items) - TELEGRAM_ITEMS_PER_SECTION
         if remaining > 0:
-            lines.append(f"  …+{remaining} more")
+            lines.append(f"  <i>…+{remaining} more</i>")
         lines.append("")  # blank line between sections
 
     if pages_url:
-        lines.append(f"Full digest → {pages_url}")
+        lines.append(f'Full digest → <a href="{html.escape(pages_url)}">{html.escape(pages_url)}</a>')
 
     text = "\n".join(lines).strip()
 
-    requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json={
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": True,
-        },
-        timeout=20,
-    )
+    try:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            },
+            timeout=20,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"Warning: Failed to send Telegram notification: {e}")
 
 
 if __name__ == "__main__":

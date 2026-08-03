@@ -38,9 +38,7 @@ Skip this step if you're happy just bookmarking the GitHub Pages URL.
 
 1. **Settings → Pages** → Source: "Deploy from a branch" → Branch: `main`,
    folder: `/docs`. Save.
-2. GitHub gives you a URL like `https://<you>.github.io/<repo>/`. Optionally
-   add it as a repo **variable** (not secret) named `PAGES_URL` so it gets
-   included in the Telegram message.
+2. GitHub gives you a URL like `https://<you>.github.io/<repo>/`. The digest automatically detects this URL from your repo name to include in Telegram pings (you can also set a repo variable named `PAGES_URL` if using a custom domain).
 
 ## 5. Schedule
 
